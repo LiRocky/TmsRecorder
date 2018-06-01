@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/TmsRecorder">
+        <file>icon.ico</file>
+        <file>default_user.png</file>
+    </qresource>
+</RCC>
