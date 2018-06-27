@@ -8,6 +8,7 @@ using namespace std;
 
 void sleep(unsigned milliseconds);
 
+
 TmsRecorder::TmsRecorder(QWidget *parent)
 	: QMainWindow(parent)
 {
@@ -15,16 +16,16 @@ TmsRecorder::TmsRecorder(QWidget *parent)
 	setWindowFlags(windowFlags() | Qt::MSWindowsFixedSizeDialogHint );
 	setWindowTitle(QString::fromLocal8Bit("转换录制文件"));
 	setWindowIcon(QIcon(":/TmsRecorder/icon.ico"));
-	ui.lineEdit_sourceFile->setReadOnly(true);
+	//ui.lineEdit_sourceFile->setReadOnly(true);
 	connect(ui.btn_selSource, SIGNAL(clicked()), this, SLOT(slot_chooseSouceFile()));	
-	connect(ui.btn_convert, SIGNAL(clicked()), this, SLOT(slot_start_convert()));
+	connect(ui.btn_convert, SIGNAL(clicked()), this, SLOT(slot_convert_singleFile()));
 	
 	m_trans = new CTrans(this);
 	m_trans->moveToThread(&m_workThread);
 	bool b = connect(&m_workThread, &QThread::finished, m_trans, &QObject::deleteLater);
 	m_workThread.start();
-	connect(m_trans, SIGNAL(sig_progress_value(int)), this, SLOT(slot_set_convert_progress(int)));
-	connect(m_trans, SIGNAL(sig_error_occured(int)), this, SLOT(slot_error_occured(int)));
+	b=connect(m_trans, SIGNAL(sig_progress_value(int)), this, SLOT(slot_set_convert_progress(int)));
+	b=connect(m_trans, SIGNAL(sig_error_occured(int)), this, SLOT(slot_error_occured(int)));
 	connect(m_trans, SIGNAL(sig_convert_finished()), this, SLOT(slot_convert_finished()));
 }
 
@@ -36,7 +37,14 @@ TmsRecorder::~TmsRecorder()
 
 QString TmsRecorder::getSourceFile()
 {
-	return ui.lineEdit_sourceFile->text();
+	if (m_sourceList.size() > 0)
+	{
+		return m_sourceList.first();
+	}
+	else
+	{
+		return QString("");
+	}
 }
 
 void TmsRecorder::setSourceFile(QString strFile)
@@ -48,10 +56,36 @@ void TmsRecorder::setSourceFile(QString strFile)
 void TmsRecorder::setParams(TmsParams params)
 {
 	//--cmd=t2m --tms=data/aaa.tms --mp4=data/aaaaaa
+	m_multiSouceFiles = params["--multiTms"];
 	m_sourceFile = params["--tms"];
 	m_outputFile = params["--mp4"];
-	m_bOnlyshowProgress = (params["--progress-only"].toLower() == "true")?true:false;
-	setSourceFile(m_sourceFile);	
+	m_bOnlyshowProgress = (params["--progress-only"].toLower() == "true") ? true : false;
+	m_sourceFolder = params["--tmsFolder"];
+	m_addTimeStamp = (params["--addTimeStamp"].toLower() == "true") ? true : false;
+	QDir sourceDir(m_sourceFolder);
+	if (sourceDir.exists())
+	{
+		QFileInfoList newFileList = sourceDir.entryInfoList();
+		int childCount = sourceDir.entryInfoList().count();
+		for (int i = 0; i < childCount; i++)
+		{
+			if (newFileList.at(i).suffix().operator ==("tms"))
+			{
+				QString abPath = newFileList.at(i).absoluteFilePath();
+				m_sourceList.append(abPath);
+			}						
+		}
+		//return;
+	}
+	if (false == m_sourceFile.isEmpty())
+	{
+		m_sourceList.append(m_sourceFile);
+	}
+	if (false == m_multiSouceFiles.isEmpty())
+	{
+		QStringList tmsFiles = m_multiSouceFiles.split("&");
+		m_sourceList.append(tmsFiles);
+	}
 }
 
 void TmsRecorder::showTmsRecorder()
@@ -79,6 +113,11 @@ void TmsRecorder::setOutPutPath()
 	m_outputFile = outDir.absolutePath();
 	if (!m_outputFile.isEmpty())
 	{
+		if (m_outputFile.contains(QRegExp("[\\x4e00-\\x9fa5]+")))
+		{
+			slot_error_occured(FILE_NAME_ERROR);
+			return;
+		}
 		QFileInfo fInfo(m_outputFile);
 		fInfo = QFileInfo(fInfo.absoluteFilePath());
 		if (fInfo.isDir())
@@ -96,25 +135,37 @@ void TmsRecorder::setOutPutPath()
 		m_outputFile = ".";
 	}
 }
-
+#include <QTextStream>
 void TmsRecorder::slot_convert_finished()
-{	
-	//打开转换后文件夹
-	QString src = getSourceFile();
-	QFileInfo fInfo(m_outputFile);
-	if (!fInfo.exists())
+{
+	QFileInfo fio = QFileInfo(getSourceFile());
+	QFile file(fio.absolutePath()+"/trans.txt");
+	if (file.open(QIODevice::ReadWrite | QIODevice::Append))
 	{
-		checkMode();
-		return;
+		QTextStream out(&file);		
+		out << fio.fileName();
+		out << "\n";
+		file.close();
 	}
-	QProcess process;
-	QString path = fInfo.absoluteFilePath();
-#ifdef WIN32
-	path.replace("/", "\\");    //***这句windows下必要***
-#endif
-	process.startDetached("explorer /," + path);
+	QDir srcDir = QFileInfo(getSourceFile()).absoluteDir();
+	//srcDir.remove(getSourceFile());
+	m_sourceList.removeFirst();
+	m_sucCount++;
+	QString stip;
+	stip = QString("%1/%2").arg(m_sucCount).arg(m_totalCount);
+	ui.label_sucTip->setText(stip);
+	if (m_totalCount > (m_sucCount + m_errorCount))
+	{
+		emit sig_start_trans(getSourceFile());
+	}
+	else if (m_totalCount == (m_sucCount + m_errorCount))
+	{
+		//打开转换后文件夹
+		openFolder(m_outputFile);
+		checkMode();
+		
+	}
 
-	checkMode();
 }
 
 void TmsRecorder::checkMode()
@@ -126,6 +177,7 @@ void TmsRecorder::checkMode()
 	else
 	{
 		ui.stackedWidget->setCurrentIndex(0);
+		m_outputFile.clear();
 	}
 }
 
@@ -136,42 +188,69 @@ void TmsRecorder::slot_chooseSouceFile()
 	{
 		path = ".";
 	}
-	QFileDialog *fd = new QFileDialog(this, QString::fromLocal8Bit("选择源文件"), path, "*.tms");
-	fd->setFileMode(QFileDialog::ExistingFile);
-	fd->setViewMode(QFileDialog::Detail);
-	if (fd->exec())
+	QStringList files = QFileDialog::getOpenFileNames(
+		this,
+		"Select one or more files to open",
+		"./",
+		"Source File(*.tms)");
+	m_sourceList = files;
+	
+		if (m_sourceList.size()<=1)
+		{
+			ui.lineEdit_sourceFile->setText(getSourceFile());
+		}
+		else
+		{
+			slot_start_convert();
+		}		
+}
+
+void TmsRecorder::slot_convert_singleFile()
+{
+	m_sourceList.clear();
+	QString srcFile = ui.lineEdit_sourceFile->text();
+	QFileInfo fio(srcFile);
+	if (fio.isFile())
 	{
-		QDir dir = fd->directory();
-		QString absolutePath = dir.absolutePath();
-		QStringList files = fd->selectedFiles();
-		ui.lineEdit_sourceFile->setText(files.at(0));
+		if (fio.exists() )
+		{
+			if ( fio.completeSuffix().contains("tms"))
+			{
+				m_sourceList.append(srcFile);
+				slot_start_convert();
+			}
+			else
+			{
+				QMessageBox::warning(this, "error", QString::fromLocal8Bit("不是有效的源文件，请检查后重试"));
+			}			
+		}
+		else
+		{
+			QMessageBox::warning(this, "error", QString::fromLocal8Bit("指定文件不存在，请检查后重试"));
+		}
+	}
+	else
+	{
+		QMessageBox::warning(this, "error", QString::fromLocal8Bit("不是有效的源文件，请检查后重试"));
 	}
 }
 
-//void TmsRecorder::slot_setOutputFile()
-//{
-//	QString path = ui.lineEdit_outputFile->text();
-//	if (!QDir(path).exists())
-//	{
-//		path = ".";
-//	}
-//	QString s = QFileDialog::getSaveFileName(this, tr("Save File"),
-//		"untitled.mp4",
-//		tr("MP4 (*.mp4)"));
-//	QFileDialog *fd = new QFileDialog(this, QString::fromLocal8Bit("选择录屏文件目录"), path, "");
-//	fd->setFileMode(QFileDialog::AnyFile);
-//	fd->setViewMode(QFileDialog::Detail);
-//	if (fd->exec())
-//	{
-//		QDir dir = fd->directory();
-//		QString absolutePath = dir.absolutePath();
-//		ui.lineEdit_outputFile->setText(absolutePath);
-//	}
-//}
-
 void TmsRecorder::slot_start_convert()
 {
+	if (m_sourceList.size() == 0)
+	{
+		return;
+	}
+	m_sucCount = 0;
+	m_errorCount = 0;
+	m_totalCount = m_sourceList.size();
+	ui.stackedWidget->setCurrentIndex(1);
+	QString stip;
+	stip = QString("%1/%2").arg(m_sucCount).arg(m_totalCount);
+	ui.label_sucTip->setText(stip);
+	ui.progressBar_3->setValue(0);
 	setOutPutPath();	
+	m_trans->setTimestamp(m_addTimeStamp);
 	emit sig_start_trans(getSourceFile());
 }
 
@@ -191,9 +270,63 @@ void TmsRecorder::slot_error_occured(int errorCode)
 	}
 	else if (errorCode == FILE_NAME_ERROR)
 	{
-		QMessageBox::warning(this, "error", QString::fromLocal8Bit("文件名不能包含中文字符"));
+		QMessageBox::warning(this, "error", QString::fromLocal8Bit("文件名或路径不能包含中文字符"));
 	}
-	checkMode();
+	else if (errorCode == TRANS_FAILED)
+	{
+		QMessageBox::warning(this, "error", QString::fromLocal8Bit("转码失败"));
+	}
+	m_sourceList.removeFirst();
+	m_errorCount++;
+	if (m_totalCount > (m_sucCount + m_errorCount))
+	{
+		emit sig_start_trans(getSourceFile());
+	}
+	else if (m_totalCount == (m_sucCount + m_errorCount))
+	{
+		
+		//打开转换后文件夹	
+		if (m_sucCount>0)
+		{
+			openFolder(m_outputFile);
+		}	
+		checkMode();
+	}	
+}
+
+void TmsRecorder::openFolder(QString strFolder)
+{
+	QFileInfo fInfo(strFolder);
+	if (fInfo.exists())
+	{
+		QProcess process;
+		QString path = fInfo.absoluteFilePath();
+#ifdef WIN32
+		path.replace("/", "\\");
+#endif
+		process.startDetached("explorer /," + path);
+		return;
+	}
+}
+#include <QCloseEvent>
+void TmsRecorder::closeEvent(QCloseEvent *event)
+{
+	if (ui.stackedWidget->currentIndex() == 1)
+	{
+		int ret = QMessageBox::warning(this, "warning", QString::fromLocal8Bit("是否终止此次转换"), QMessageBox::Ok, QMessageBox::Cancel);
+		if (ret == QMessageBox::Ok)
+		{
+			event->accept();
+			QCoreApplication::quit();
+		}
+		else
+		{
+			event->ignore();
+			show();
+			activateWindow();
+		}
+	}
+	
 }
 
 /////////////////////////
@@ -204,7 +337,7 @@ CTrans::CTrans(TmsRecorder* recorder) :m_reoder(recorder)
 
 CTrans::~CTrans()
 {
-
+	m_timeStamp = false;
 }
 
 void CTrans::setOutPutPath(QString outPath)
@@ -220,22 +353,28 @@ void CTrans::transRecordFile(QString sourceFile)
 		emit sig_error_occured(FILE_NOT_FOUND);
 		return;
 	}
+	if (fInfo.absoluteFilePath().contains(QRegExp("[\\x4e00-\\x9fa5]+")))
+	{
+		emit sig_error_occured(FILE_NAME_ERROR);
+		return;
+	}
 	ITms2Player* transfer = ITms2Player::create(sourceFile.toStdString(), false);
 	if (transfer) {
 		QString sOutPath = m_outPutPath.isEmpty() ? fInfo.absolutePath() : m_outPutPath;
 		QString strOutFile = QString("%1/%2").arg(sOutPath, fInfo.completeBaseName());
 		transfer->setOutputFile(strOutFile.toStdString());
-		transfer->setVideoCrop(false);
-		transfer->setVideoBgImage("./default_user2.png");
-		transfer->setViewsBgImage("./default_user.png");
-		//
+		transfer->setVideoCrop(true);
+		transfer->setTimestamp(m_timeStamp);
+		//transfer->setVideoBgImage("./default_user.png");
+		//transfer->setViewsBgImage("./default_user.png");
+	
 		auto cb = [this](int percent) {
 			emit sig_progress_value(percent % 100);
 		};
-		transfer->transfer(cb, 70);
+		transfer->transfer(cb, 80);
 	}
 	else {
-		emit sig_error_occured(FILE_NAME_ERROR);
+		emit sig_error_occured(TRANS_FAILED);
 		ITms2Player::destroy(transfer);
 		return;	
 	}
@@ -247,6 +386,11 @@ void CTrans::transRecordFile(QString sourceFile)
 	emit sig_convert_finished();
 }
 
+
+void CTrans::setTimestamp(bool timestamp)
+{
+	m_timeStamp = timestamp;
+}
 
 #ifdef RT_WIN32
 #include <windows.h>
