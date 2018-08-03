@@ -1,11 +1,19 @@
 #include "tmsrecorder.h"
 #include <QtWidgets/QApplication>
-#include "./include/gflags/gflags.h"
 #include <iostream>
+#include <QtDebug>  
+
+#include "minidump.h"
+#include "log.h"
 using namespace std;
 
 int  main(int argc, char *argv[]) {
 	QApplication a(argc, argv);
+	InitMinDump();
+	//InitLogFile();
+	//qInstallMessageHandler(myMessageOutput);
+	//qDebug() << "sasdfewfasdfas";
+	//qDebug() << "123456789";
 	//parse args
 	QStringList arguments = QCoreApplication::arguments();
 	QMap<QString, QString> argmap;
@@ -23,7 +31,9 @@ int  main(int argc, char *argv[]) {
 	TmsRecorder w;
 	w.setParams(argmap);
 	w.showTmsRecorder();
-	return a.exec();
+	a.exec();
+	closeLogFile();
+	return 0;
 }
 
 #if 0

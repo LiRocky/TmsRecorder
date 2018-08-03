@@ -40,7 +40,7 @@
      <widget class="QPushButton" name="btn_selSource">
       <property name="geometry">
        <rect>
-        <x>10</x>
+        <x>220</x>
         <y>80</y>
         <width>75</width>
         <height>23</height>
@@ -74,6 +74,22 @@
       </property>
       <property name="text">
        <string>需要转换的文件：</string>
+      </property>
+     </widget>
+     <widget class="QCheckBox" name="checkBox_openFolder">
+      <property name="geometry">
+       <rect>
+        <x>10</x>
+        <y>80</y>
+        <width>171</width>
+        <height>23</height>
+       </rect>
+      </property>
+      <property name="text">
+       <string>转码结束后打开文件夹</string>
+      </property>
+      <property name="checked">
+       <bool>true</bool>
       </property>
      </widget>
     </widget>
